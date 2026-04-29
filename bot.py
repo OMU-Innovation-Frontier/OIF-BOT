@@ -30,7 +30,7 @@ APPROVE_EMOJI = "✅"
 REJECT_EMOJI  = "❌"
 
 # 管理者ロール名（このロールを持つ人だけ承認できる）
-ADMIN_ROLE_NAME = "OIF Core"
+ADMIN_ROLE_NAME = "OIF Leaders"
 
 # ─────────────────────────────────────────
 # Bot初期化
