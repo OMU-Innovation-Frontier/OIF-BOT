@@ -15,11 +15,13 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 # ロール名（サーバーの実際のロール名に合わせて変更）
+# サーバー側でロール名を変えたら .env / Railway の Variables を直すだけで済むよう環境変数を優先する。
+# 過去に ADMIN_ROLE_NAME がサーバーの実態とズレて承認が丸ごと無言で死んだため（2026-08 調査）。
 ROLE_NAMES = {
-    "omu":      "OMU",
-    "external": "外部",
-    "alumni":   "OB/OG",
-    "pending":  "未認証",
+    "omu":      os.getenv("ROLE_OMU", "OMU"),
+    "external": os.getenv("ROLE_EXTERNAL", "外部"),
+    "alumni":   os.getenv("ROLE_ALUMNI", "OB/OG"),
+    "pending":  os.getenv("ROLE_PENDING", "未認証"),
 }
 
 # 申請チャンネルのID（Discordで右クリック→IDをコピー）
@@ -30,7 +32,7 @@ APPROVE_EMOJI = "✅"
 REJECT_EMOJI  = "❌"
 
 # 管理者ロール名（このロールを持つ人だけ承認できる）
-ADMIN_ROLE_NAME = "OIF Leaders"
+ADMIN_ROLE_NAME = os.getenv("ROLE_ADMIN", "運営")
 
 # ─────────────────────────────────────────
 # Bot初期化
@@ -97,6 +99,22 @@ def format_nickname(name: str, grade: str, dept: str) -> str:
 async def on_ready():
     print(f"✅ OIF Bot 起動完了: {bot.user}")
 
+    # 設定がサーバーの実態と合っているか起動時に必ず検証する。
+    # ここを黙って通すと「Botは動いているのに何も起きない」状態になり、原因究明に時間を食う。
+    for guild in bot.guilds:
+        print(f"--- 設定チェック: {guild.name} ---")
+        for key, name in ROLE_NAMES.items():
+            if discord.utils.get(guild.roles, name=name) is None:
+                print(f"  ❌ ロール「{name}」({key}) が存在しません。ROLE_{key.upper()} を修正してください")
+        if discord.utils.get(guild.roles, name=ADMIN_ROLE_NAME) is None:
+            print(f"  ❌ 管理者ロール「{ADMIN_ROLE_NAME}」が存在しません。承認が全て無視されます（ROLE_ADMIN）")
+        if guild.get_channel(APPLICATION_CHANNEL_ID) is None:
+            print(f"  ❌ 申請チャンネル {APPLICATION_CHANNEL_ID} が見つかりません（APPLICATION_CHANNEL_ID）")
+        if not guild.me.guild_permissions.manage_roles:
+            print("  ❌ Manage Roles 権限がありません")
+        if not guild.me.guild_permissions.manage_nicknames:
+            print("  ❌ Manage Nicknames 権限がありません")
+
 
 # ─────────────────────────────────────────
 # イベント: 新規参加 → 未認証ロール自動付与
@@ -130,8 +148,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         except Exception:
             return
 
-    # 管理者以外のリアクションは無視
+    # 管理者以外のリアクションは無視（✅/❌ のときだけ、なぜ無視したかを残す）
     if not reactor or not is_admin(reactor):
+        if str(payload.emoji) in (APPROVE_EMOJI, REJECT_EMOJI):
+            print(f"⚠️ [無視] {reactor} は「{ADMIN_ROLE_NAME}」を持っていません")
         return
 
     channel = guild.get_channel(payload.channel_id)
@@ -165,6 +185,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         if role:
             await applicant.add_roles(role)
             print(f"✅ [承認] {applicant.display_name} に「{ROLE_NAMES[role_key]}」を付与")
+        else:
+            print(f"❌ [失敗] ロール「{ROLE_NAMES[role_key]}」がサーバーに存在しません")
         if pending and pending in applicant.roles:
             await applicant.remove_roles(pending)
 
@@ -187,6 +209,15 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         await channel.send(
             f"{applicant.mention} 承認しました！ロール「{ROLE_NAMES[role_key]}」を付与しました。",
             delete_after=10,
+        )
+
+    elif emoji == APPROVE_EMOJI:
+        # ✅ は押されたが「所属：」行が読めなかった。無言だと押した側が成功と誤認する
+        print(f"❌ [パース失敗] {applicant.display_name} の申請に「所属」行がありません")
+        await channel.send(
+            f"{applicant.mention} 「所属：OMU / 外部 / OB・OG」の行が読み取れませんでした。"
+            "テンプレートの形式で書き直してください。",
+            delete_after=30,
         )
 
     elif emoji == REJECT_EMOJI:
